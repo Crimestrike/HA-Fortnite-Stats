@@ -1,2 +1,1 @@
-# HA-Fortnite-Stats
-unknown
+First project ever!
