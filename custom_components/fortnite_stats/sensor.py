@@ -5,9 +5,8 @@ from datetime import timedelta
 import aiohttp
 import voluptuous as vol
 
-# DEZE REGEL IS CRUCIAAL VOOR DE FOUTMELDING:
+# Essentiële imports voor configuratie en sensoren
 import homeassistant.helpers.config_validation as cv
-
 from homeassistant.components.sensor import (
     PLATFORM_SCHEMA, 
     SensorEntity, 
@@ -22,27 +21,26 @@ _LOGGER = logging.getLogger(__name__)
 CONF_PLAYERS = "players"
 SCAN_INTERVAL = timedelta(minutes=15)
 
+# Dit schema vertelt Home Assistant welke velden in configuration.yaml mogen staan
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_API_KEY): cv.string,
     vol.Required(CONF_PLAYERS): vol.All(cv.ensure_list, [cv.string]),
 })
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up de Fortnite sensoren vanuit YAML."""
-    api_key = config[CONF_API_KEY]
-    players = config[CONF_PLAYERS]
+    """Initialiseer de sensoren vanuit YAML."""
+    api_key = config.get(CONF_API_KEY)
+    players = config.get(CONF_PLAYERS)
     session = async_get_clientsession(hass)
 
     entities = []
 
     for player in players:
         coordinator = FortniteDataUpdateCoordinator(hass, session, api_key, player)
-        
-        # Haal direct de eerste keer data op
         await coordinator.async_refresh()
 
-        # Lijst met sensoren, labels, icoontjes en eenheden
-        stats_to_track = [
+        # Definitie van de statistieken die we bijhouden
+        stats_map = [
             ("wins", "Wins", "mdi:trophy", "wins"),
             ("kills", "Kills", "mdi:target", "kills"),
             ("deaths", "Deaths", "mdi:skull", "deaths"),
@@ -50,19 +48,19 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
             ("matches", "Matches", "mdi:controller-classic", "matches"),
         ]
 
-        for stat_key, label, icon, unit in stats_to_track:
-            entities.append(FortniteSensor(coordinator, player, stat_key, label, icon, unit))
+        for key, label, icon, unit in stats_map:
+            entities.append(FortniteSensor(coordinator, player, key, label, icon, unit))
 
     async_add_entities(entities)
 
 class FortniteDataUpdateCoordinator(DataUpdateCoordinator):
-    """Beheert het ophalen van data voor één specifieke speler."""
+    """Haalt data op van de API voor één speler."""
 
     def __init__(self, hass, session, api_key, player_name):
         super().__init__(
             hass,
             _LOGGER,
-            name=f"Fortnite stats voor {player_name}",
+            name=f"Fortnite {player_name}",
             update_interval=SCAN_INTERVAL,
         )
         self.session = session
@@ -70,35 +68,31 @@ class FortniteDataUpdateCoordinator(DataUpdateCoordinator):
         self.player_name = player_name
 
     async def _async_update_data(self):
-        """Haal de data op als één pakket."""
+        """Maak de API call."""
         url = f"https://fortnite-api.com/v2/stats/br/v2?name={self.player_name}"
         headers = {"Authorization": self.api_key}
 
         try:
-            async with self.session.get(url, headers=headers, timeout=10) as response:
+            async with self.session.get(url, headers=headers, timeout=15) as response:
                 if response.status == 200:
-                    json_res = await response.json()
-                    if "data" in json_res and "stats" in json_res["data"]:
-                        stats = json_res['data']['stats']['all']['overall']
-                        return {
-                            "wins": stats.get("wins"),
-                            "kills": stats.get("kills"),
-                            "deaths": stats.get("deaths"),
-                            "matches": stats.get("matches"),
-                            "kd": stats.get("kd")
-                        }
-                    else:
-                        raise UpdateFailed("Ongeldige response van API")
+                    res = await response.json()
+                    stats = res['data']['stats']['all']['overall']
+                    return {
+                        "wins": stats.get("wins"),
+                        "kills": stats.get("kills"),
+                        "deaths": stats.get("deaths"),
+                        "matches": stats.get("matches"),
+                        "kd": stats.get("kd")
+                    }
                 elif response.status == 429:
-                    _LOGGER.warning(f"Rate limit voor {self.player_name}. Wachten...")
-                    raise UpdateFailed("Rate limit (429)")
+                    raise UpdateFailed("Rate limit bereikt")
                 else:
-                    raise UpdateFailed(f"API fout: {response.status}")
+                    raise UpdateFailed(f"API Fout: {response.status}")
         except Exception as err:
             raise UpdateFailed(f"Verbindingsfout: {err}")
 
 class FortniteSensor(CoordinatorEntity, SensorEntity):
-    """Sensor geschikt voor statistiek-grafieken."""
+    """Sensor die data toont in Home Assistant."""
 
     def __init__(self, coordinator, player, key, label, icon, unit):
         super().__init__(coordinator)
@@ -107,13 +101,13 @@ class FortniteSensor(CoordinatorEntity, SensorEntity):
         self._attr_icon = icon
         self._attr_unique_id = f"fortnite_{player}_{key}".lower().replace(" ", "_")
         
-        # Nodig voor de statistieken grafiek:
+        # Voor de statistiek-grafieken
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = unit
 
     @property
     def native_value(self):
-        """Geef de waarde door aan Home Assistant."""
+        """Toon de waarde van de statistiek."""
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get(self.key)
