@@ -1,10 +1,9 @@
 {
   "domain": "fortnite_stats",
   "name": "Fortnite Player Stats",
-  "codeowners": ["@Crimestrike"],
-  "dependencies": [],
+  "version": "1.0.0",
   "documentation": "https://github.com/Crimestrike/HA-Fortnite-Stats",
-  "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/Crimestrike/HA-Fortnite-Stats",
-  "version": "0.0.1"
+  "issue_tracker": "https://github.com/Crimestrike/HA-Fortnite-Stats/issues",
+  "codeowners": ["@Crimestrike"],
+  "iot_class": "cloud_polling"
 }
