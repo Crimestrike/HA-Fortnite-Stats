@@ -5,7 +5,9 @@ from datetime import timedelta
 import aiohttp
 import voluptuous as vol
 
+# DEZE REGEL IS CRUCIAAL VOOR DE FOUTMELDING:
 import homeassistant.helpers.config_validation as cv
+
 from homeassistant.components.sensor import (
     PLATFORM_SCHEMA, 
     SensorEntity, 
@@ -39,7 +41,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         # Haal direct de eerste keer data op
         await coordinator.async_refresh()
 
-        # Hier voegen we de 'unit' toe aan de lijst, die is nodig voor de grafiek
+        # Lijst met sensoren, labels, icoontjes en eenheden
         stats_to_track = [
             ("wins", "Wins", "mdi:trophy", "wins"),
             ("kills", "Kills", "mdi:target", "kills"),
@@ -88,6 +90,7 @@ class FortniteDataUpdateCoordinator(DataUpdateCoordinator):
                     else:
                         raise UpdateFailed("Ongeldige response van API")
                 elif response.status == 429:
+                    _LOGGER.warning(f"Rate limit voor {self.player_name}. Wachten...")
                     raise UpdateFailed("Rate limit (429)")
                 else:
                     raise UpdateFailed(f"API fout: {response.status}")
@@ -95,7 +98,7 @@ class FortniteDataUpdateCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"Verbindingsfout: {err}")
 
 class FortniteSensor(CoordinatorEntity, SensorEntity):
-    """Sensor die data uit de Coordinator haalt en geschikt is voor grafieken."""
+    """Sensor geschikt voor statistiek-grafieken."""
 
     def __init__(self, coordinator, player, key, label, icon, unit):
         super().__init__(coordinator)
@@ -104,7 +107,7 @@ class FortniteSensor(CoordinatorEntity, SensorEntity):
         self._attr_icon = icon
         self._attr_unique_id = f"fortnite_{player}_{key}".lower().replace(" ", "_")
         
-        # DEZE REGELS ZIJN NIEUW EN NODIG VOOR JE GRAFIEK:
+        # Nodig voor de statistieken grafiek:
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = unit
 
