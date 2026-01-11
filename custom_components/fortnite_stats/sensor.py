@@ -5,7 +5,6 @@ from datetime import timedelta
 import aiohttp
 import voluptuous as vol
 
-# Essentiële imports voor configuratie en sensoren
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import (
     PLATFORM_SCHEMA, 
@@ -19,27 +18,28 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 _LOGGER = logging.getLogger(__name__)
 
 CONF_PLAYERS = "players"
+# De coordinator draait elke 15 minuten en verwerkt dan ÉÉN speler
 SCAN_INTERVAL = timedelta(minutes=15)
 
-# Dit schema vertelt Home Assistant welke velden in configuration.yaml mogen staan
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_API_KEY): cv.string,
     vol.Required(CONF_PLAYERS): vol.All(cv.ensure_list, [cv.string]),
 })
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Initialiseer de sensoren vanuit YAML."""
+    """Set up de Fortnite sensoren met een gedeelde, sequentiële coordinator."""
     api_key = config.get(CONF_API_KEY)
     players = config.get(CONF_PLAYERS)
     session = async_get_clientsession(hass)
 
+    # We maken één coordinator voor ALLE spelers
+    coordinator = FortniteGlobalCoordinator(hass, session, api_key, players)
+    
+    # Haal bij de start slechts 1 speler op (de eerste in de lijst)
+    await coordinator.async_refresh()
+
     entities = []
-
     for player in players:
-        coordinator = FortniteDataUpdateCoordinator(hass, session, api_key, player)
-        await coordinator.async_refresh()
-
-        # Definitie van de statistieken die we bijhouden
         stats_map = [
             ("wins", "Wins", "mdi:trophy", "wins"),
             ("kills", "Kills", "mdi:target", "kills"),
@@ -53,31 +53,39 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
 
     async_add_entities(entities)
 
-class FortniteDataUpdateCoordinator(DataUpdateCoordinator):
-    """Haalt data op van de API voor één speler."""
+class FortniteGlobalCoordinator(DataUpdateCoordinator):
+    """Coordinator die spelers één voor één ophaalt om rate limits te voorkomen."""
 
-    def __init__(self, hass, session, api_key, player_name):
+    def __init__(self, hass, session, api_key, players):
         super().__init__(
             hass,
             _LOGGER,
-            name=f"Fortnite {player_name}",
+            name="Fortnite Global Coordinator",
             update_interval=SCAN_INTERVAL,
         )
         self.session = session
         self.api_key = api_key
-        self.player_name = player_name
+        self.players = players
+        self._current_player_index = 0
+        # We slaan de data op per speler: { "Player1": {...}, "Player2": {...} }
+        self.data = {player: {} for player in players}
 
     async def _async_update_data(self):
-        """Maak de API call."""
-        url = f"https://fortnite-api.com/v2/stats/br/v2?name={self.player_name}"
+        """Haal data op voor de volgende speler in de lijst."""
+        player_to_fetch = self.players[self._current_player_index]
+        url = f"https://fortnite-api.com/v2/stats/br/v2?name={player_to_fetch}"
         headers = {"Authorization": self.api_key}
+
+        _LOGGER.info(f"Bezig met ophalen Fortnite stats voor {player_to_fetch} (volgende speler over 15 min)")
 
         try:
             async with self.session.get(url, headers=headers, timeout=15) as response:
                 if response.status == 200:
                     res = await response.json()
                     stats = res['data']['stats']['all']['overall']
-                    return {
+                    
+                    # Update alleen de data van deze specifieke speler
+                    self.data[player_to_fetch] = {
                         "wins": stats.get("wins"),
                         "kills": stats.get("kills"),
                         "deaths": stats.get("deaths"),
@@ -85,29 +93,36 @@ class FortniteDataUpdateCoordinator(DataUpdateCoordinator):
                         "kd": stats.get("kd")
                     }
                 elif response.status == 429:
-                    raise UpdateFailed("Rate limit bereikt")
+                    _LOGGER.warning("Rate limit bereikt. We slaan deze beurt over.")
                 else:
-                    raise UpdateFailed(f"API Fout: {response.status}")
+                    _LOGGER.error(f"API Fout voor {player_to_fetch}: {response.status}")
+
+            # Verplaats de index naar de volgende speler voor de volgende over 15 minuten
+            self._current_player_index = (self._current_player_index + 1) % len(self.players)
+            
+            # Geef de volledige dictionary terug zodat alle sensoren hun data behouden
+            return self.data
+
         except Exception as err:
-            raise UpdateFailed(f"Verbindingsfout: {err}")
+            _LOGGER.error(f"Verbindingsfout tijdens ophalen {player_to_fetch}: {err}")
+            return self.data
 
 class FortniteSensor(CoordinatorEntity, SensorEntity):
-    """Sensor die data toont in Home Assistant."""
+    """Sensor die data uitleest uit de Global Coordinator."""
 
     def __init__(self, coordinator, player, key, label, icon, unit):
         super().__init__(coordinator)
+        self.player = player
         self.key = key
         self._attr_name = f"Fortnite {player} {label}"
         self._attr_icon = icon
         self._attr_unique_id = f"fortnite_{player}_{key}".lower().replace(" ", "_")
-        
-        # Voor de statistiek-grafieken
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = unit
 
     @property
     def native_value(self):
-        """Toon de waarde van de statistiek."""
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get(self.key)
+        """Haal de waarde op van de specifieke speler uit de coordinator data."""
+        if self.coordinator.data and self.player in self.coordinator.data:
+            return self.coordinator.data[self.player].get(self.key)
+        return None
